@@ -11,6 +11,7 @@ module System.Remote.Common
       Counters
     , Gauges
     , Labels
+    , Monitor(..)
     , Server(..)
 
     , Ref(..)
@@ -19,6 +20,9 @@ module System.Remote.Common
     , getCounter
     , getGauge
     , getLabel
+    , monCounter
+    , monGauge
+    , monLabel
 
       -- * Sampling
     , Number(..)
@@ -34,9 +38,11 @@ module System.Remote.Common
     , buildAll
     , buildCombined
     , buildOne
+
+    , newMonitor
     ) where
 
-import Control.Applicative ((<$>))
+import Control.Applicative ((<$>), (<*>))
 import Control.Concurrent (ThreadId)
 import Control.Monad (forM)
 import Control.Monad.IO.Class (liftIO)
@@ -47,7 +53,7 @@ import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 import qualified Data.HashMap.Strict as M
-import Data.IORef (IORef, atomicModifyIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef, newIORef, readIORef)
 import Data.Int (Int64)
 import qualified Data.Map as Map
 import qualified Data.Text as T
@@ -73,13 +79,18 @@ type Gauges = M.HashMap T.Text Gauge
 -- Map of user-defined labels.
 type Labels = M.HashMap T.Text Label
 
+-- | The set of 'Counters', 'Gauges' and 'Labels'.
+data Monitor = Monitor
+    { userCounters :: !(IORef Counters)
+    , userGauges   :: !(IORef Gauges)
+    , userLabels   :: !(IORef Labels)
+    }
+
 -- | A handle that can be used to control the monitoring server.
 -- Created by 'forkServer'.
-data Server = Server {
-      threadId :: {-# UNPACK #-} !ThreadId
-    , userCounters :: !(IORef Counters)
-    , userGauges :: !(IORef Gauges)
-    , userLabels :: !(IORef Labels)
+data Server = Server
+    { threadId   :: {-# UNPACK #-} !ThreadId
+    , getMonitor :: !Monitor
     }
 
 ------------------------------------------------------------------------
@@ -100,6 +111,14 @@ instance Ref Gauge Int where
 instance Ref Label T.Text where
     new = Label.new
     read = Label.read
+
+-- | Create a new 'Monitor' value with empty 'Gauges', 'Counters' and
+-- 'Labels'.
+newMonitor :: IO Monitor
+newMonitor = Monitor
+    <$> newIORef M.empty
+    <*> newIORef M.empty
+    <*> newIORef M.empty
 
 -- | Lookup a 'Ref' by name in the given map.  If no 'Ref' exists
 -- under the given name, create a new one, insert it into the map and
@@ -126,7 +145,7 @@ getRef name mapRef = do
 getCounter :: T.Text  -- ^ Counter name
            -> Server  -- ^ Server that will serve the counter
            -> IO Counter
-getCounter name server = getRef name (userCounters server)
+getCounter name = monCounter name . getMonitor
 
 -- | Return the gauge associated with the given name and server.
 -- Multiple calls to 'getGauge' with the same arguments will return
@@ -135,7 +154,7 @@ getCounter name server = getRef name (userCounters server)
 getGauge :: T.Text  -- ^ Gauge name
          -> Server  -- ^ Server that will serve the gauge
          -> IO Gauge
-getGauge name server = getRef name (userGauges server)
+getGauge name = monGauge name . getMonitor
 
 -- | Return the label associated with the given name and server.
 -- Multiple calls to 'getLabel' with the same arguments will return
@@ -144,7 +163,19 @@ getGauge name server = getRef name (userGauges server)
 getLabel :: T.Text  -- ^ Label name
          -> Server  -- ^ Server that will serve the label
          -> IO Label
-getLabel name server = getRef name (userLabels server)
+getLabel name = monLabel name . getMonitor
+
+-- | Like @getCounter@ but working directly on a 'Monitor'.
+monCounter :: T.Text -> Monitor -> IO Counter
+monCounter name = getRef name . userCounters
+
+-- | Like @getGauge@ but working directly on a 'Monitor'.
+monGauge :: T.Text -> Monitor -> IO Gauge
+monGauge name = getRef name . userGauges
+
+-- | Like @getLabel@ but working directly on a 'Monitor'.
+monLabel :: T.Text -> Monitor -> IO Label
+monLabel name = getRef name . userLabels
 
 ------------------------------------------------------------------------
 -- * Sampling
@@ -157,7 +188,7 @@ data Metrics = Metrics
     }
 
 -- | Sample all metrics.
-sampleAll :: Server -> IO Metrics
+sampleAll :: Monitor -> IO Metrics
 sampleAll server = do
     counters <- readAllRefs (userCounters server)
     gauges <- readAllRefs (userGauges server)
@@ -343,8 +374,8 @@ buildMany mapRef = do
 
 -- | Serve all counter, gauges and labels, built-in or not, as a
 -- nested JSON object.
-buildAll :: IORef Counters -> IORef Gauges -> IORef Labels -> IO L.ByteString
-buildAll counters gauges labels = do
+buildAll :: Monitor -> IO L.ByteString
+buildAll (Monitor counters gauges labels) = do
     gcStats <- getGcStats
     counterList <- readAllRefsAsJson counters
     gaugeList <- readAllRefsAsJson gauges
@@ -353,8 +384,8 @@ buildAll counters gauges labels = do
     return $ A.encode $ A.toJSON $ Stats gcStats counterList gaugeList
         labelList time
 
-buildCombined :: IORef Counters -> IORef Gauges -> IORef Labels -> IO L.ByteString
-buildCombined counters gauges labels = do
+buildCombined :: Monitor -> IO L.ByteString
+buildCombined (Monitor counters gauges labels) = do
     gcStats <- getGcStats
     counterList <- readAllRefsAsJson counters
     gaugeList <- readAllRefsAsJson gauges

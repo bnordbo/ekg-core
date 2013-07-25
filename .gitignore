@@ -5,3 +5,7 @@
 *.tix
 .hpc/
 /dist/*
+*.swp
+*.swo
+cabal-dev
+tags

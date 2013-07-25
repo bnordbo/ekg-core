@@ -42,12 +42,7 @@ module System.Remote.Monitoring
 
 import Control.Concurrent (ThreadId, forkIO)
 import qualified Data.ByteString as S
-import qualified Data.HashMap.Strict as M
-import Data.IORef (newIORef)
-import Prelude hiding (read)
-
 import System.Remote.Common
-
 import System.Remote.Snap
 
 -- $configuration
@@ -218,8 +213,6 @@ forkServer :: S.ByteString  -- ^ Host to listen on (e.g. \"localhost\")
            -> Int           -- ^ Port to listen on (e.g. 8000)
            -> IO Server
 forkServer host port = do
-    counters <- newIORef M.empty
-    gauges <- newIORef M.empty
-    labels <- newIORef M.empty
-    tid <- forkIO $ startServer counters gauges labels host port
-    return $! Server tid counters gauges labels
+    mon <- newMonitor
+    tid <- forkIO $ startServer mon host port
+    return $! Server tid mon
