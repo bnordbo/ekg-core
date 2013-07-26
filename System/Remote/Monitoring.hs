@@ -42,12 +42,8 @@ module System.Remote.Monitoring
 
 import Control.Concurrent (ThreadId, forkIO)
 import qualified Data.ByteString as S
-import qualified Data.HashMap.Strict as M
-import Data.IORef (newIORef)
-import Prelude hiding (read)
 
-import System.Remote.Common
-
+import System.Remote
 import System.Remote.Snap
 
 -- $configuration
@@ -201,10 +197,12 @@ import System.Remote.Snap
 ------------------------------------------------------------------------
 -- * The monitoring server
 
+data Server = Server {-# UNPACK #-} !ThreadId !Monitor
+
 -- | The thread ID of the server.  You can kill the server by killing
 -- this thread (i.e. by throwing it an asynchronous exception.)
 serverThreadId :: Server -> ThreadId
-serverThreadId = threadId
+serverThreadId (Server tid _) = tid
 
 -- | Start an HTTP server in a new thread.  The server replies to GET
 -- requests to the given host and port.  The host argument can be
@@ -218,8 +216,6 @@ forkServer :: S.ByteString  -- ^ Host to listen on (e.g. \"localhost\")
            -> Int           -- ^ Port to listen on (e.g. 8000)
            -> IO Server
 forkServer host port = do
-    counters <- newIORef M.empty
-    gauges <- newIORef M.empty
-    labels <- newIORef M.empty
-    tid <- forkIO $ startServer counters gauges labels host port
-    return $! Server tid counters gauges labels
+    mon <- newMonitor
+    tid <- forkIO $ startServer mon host port
+    return $! Server tid mon
