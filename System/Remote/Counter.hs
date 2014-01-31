@@ -10,19 +10,18 @@ module System.Remote.Counter
     , add
     ) where
 
+import Control.Monad.IO.Class
 import Data.IORef (atomicModifyIORef)
-import Prelude hiding (subtract)
-
 import System.Remote.Counter.Internal
 
 -- | Increase the counter by one.
-inc :: Counter -> IO ()
-inc (C ref) = do
+inc :: MonadIO m => Counter -> m ()
+inc (C ref) = liftIO $! do
     !_ <- atomicModifyIORef ref $ \ n -> let n' = n + 1 in (n', n')
     return ()
 
 -- | Increase the counter by the given amount.
-add :: Counter -> Int -> IO ()
-add (C ref) i = do
+add :: MonadIO m => Counter -> Int -> m ()
+add (C ref) i = liftIO $! do
     !_ <- atomicModifyIORef ref $ \ n -> let n' = n + i in (n', n')
     return ()

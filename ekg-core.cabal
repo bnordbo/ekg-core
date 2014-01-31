@@ -1,0 +1,43 @@
+name:                ekg-core
+version:             0.2
+synopsis:            Remote monitoring of processes
+description:
+  This library contains the core of ekg sans the server part.
+homepage:            https://github.com/tibbe/ekg
+license:             BSD3
+license-file:        LICENSE
+author:              Johan Tibell
+maintainer:          johan.tibell@gmail.com
+category:            System
+build-type:          Simple
+cabal-version:       >=1.6
+extra-source-files:  README.md
+
+library
+  exposed-modules:
+    System.Remote
+    System.Remote.Counter
+    System.Remote.Gauge
+    System.Remote.Label
+
+  other-modules:
+    System.Remote.Common
+    System.Remote.Counter.Internal
+    System.Remote.Gauge.Internal
+    System.Remote.Label.Internal
+
+  build-depends:
+    aeson < 0.8,
+    base >= 4.5 && < 5,
+    bytestring < 1.0,
+    containers < 0.6,
+    text < 1.2,
+    time < 1.5,
+    transformers < 0.4,
+    unordered-containers < 0.3
+
+  ghc-options: -Wall
+
+source-repository head
+  type:     git
+  location: https://github.com/twittner/ekg-core.git

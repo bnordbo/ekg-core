@@ -14,42 +14,42 @@ module System.Remote.Gauge
     , modify
     ) where
 
+import Control.Monad.IO.Class
 import Data.IORef (atomicModifyIORef)
 import Prelude hiding (subtract)
-
 import System.Remote.Gauge.Internal
 
 -- | Increase the gauge by one.
-inc :: Gauge -> IO ()
-inc (C ref) = do
+inc :: MonadIO m => Gauge -> m ()
+inc (C ref) = liftIO $! do
     !_ <- atomicModifyIORef ref $ \ n -> let n' = n + 1 in (n', n')
     return ()
 
 -- | Decrease the gauge by one.
-dec :: Gauge -> IO ()
-dec (C ref) = do
+dec :: MonadIO m => Gauge -> m ()
+dec (C ref) = liftIO $! do
     !_ <- atomicModifyIORef ref $ \ n -> let n' = n - 1 in (n', n')
     return ()
 
 -- | Increase the gauge by the given amount.
-add :: Gauge -> Int -> IO ()
-add (C ref) i = do
+add :: MonadIO m => Gauge -> Int -> m ()
+add (C ref) i = liftIO $! do
     !_ <- atomicModifyIORef ref $ \ n -> let n' = n + i in (n', n')
     return ()
 
 -- | Decrease the gauge by the given amount.
-subtract :: Gauge -> Int -> IO ()
-subtract (C ref) i = do
+subtract :: MonadIO m => Gauge -> Int -> m ()
+subtract (C ref) i = liftIO $! do
     !_ <- atomicModifyIORef ref $ \ n -> let n' = n - i in (n', n')
     return ()
 
 -- | Set the gauge to the given value.
-set :: Gauge -> Int -> IO ()
-set (C ref) !i = atomicModifyIORef ref $ \ _ -> (i, ())
+set :: MonadIO m => Gauge -> Int -> m ()
+set (C ref) !i = liftIO $! atomicModifyIORef ref $ \ _ -> (i, ())
 
 -- | Set the gauge to the result of applying the given function to the
 -- value.
-modify :: (Int -> Int) -> Gauge -> IO ()
-modify f (C ref) = do
+modify :: MonadIO m => (Int -> Int) -> Gauge -> m ()
+modify f (C ref) = liftIO $! do
     !_ <- atomicModifyIORef ref $ \ i -> let i' = f i in (i', i')
     return ()

@@ -6,29 +6,24 @@
 {-# LANGUAGE RecordWildCards #-}
 
 module System.Remote.Common
-    (
-      -- * Types
+    ( -- * Types
       Counters
     , Gauges
     , Labels
-    , Monitor(..)
-    , Server(..)
+    , Monitor (..)
 
-    , Ref(..)
+    , newMonitor
 
       -- * User-defined counters, gauges, and labels
     , getCounter
     , getGauge
     , getLabel
-    , monCounter
-    , monGauge
-    , monLabel
 
       -- * Sampling
     , Number(..)
+    , Metric(..)
     , Metrics(..)
     , sampleAll
-    , Metric(..)
     , sampleCombined
     , sampleCounters
     , sampleGauges
@@ -38,20 +33,15 @@ module System.Remote.Common
     , buildAll
     , buildCombined
     , buildOne
-
-    , newMonitor
     ) where
 
 import Control.Applicative ((<$>), (<*>))
-import Control.Concurrent (ThreadId)
 import Control.Monad (forM)
-import Control.Monad.IO.Class (liftIO)
-import qualified Data.Aeson.Encode as A
-import Data.Aeson.Types ((.=))
+import Control.Monad.IO.Class (liftIO, MonadIO)
+import Data.Aeson.Types ((.=), Value)
 import qualified Data.Aeson.Types as A
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
-import qualified Data.ByteString.Lazy as L
 import qualified Data.HashMap.Strict as M
 import Data.IORef (IORef, atomicModifyIORef, newIORef, readIORef)
 import Data.Int (Int64)
@@ -86,13 +76,6 @@ data Monitor = Monitor
     , userLabels   :: !(IORef Labels)
     }
 
--- | A handle that can be used to control the monitoring server.
--- Created by 'forkServer'.
-data Server = Server
-    { threadId   :: {-# UNPACK #-} !ThreadId
-    , getMonitor :: !Monitor
-    }
-
 ------------------------------------------------------------------------
 -- * User-defined counters, gauges and labels
 
@@ -114,8 +97,8 @@ instance Ref Label T.Text where
 
 -- | Create a new 'Monitor' value with empty 'Gauges', 'Counters' and
 -- 'Labels'.
-newMonitor :: IO Monitor
-newMonitor = Monitor
+newMonitor :: MonadIO m => m Monitor
+newMonitor = liftIO $! Monitor
     <$> newIORef M.empty
     <*> newIORef M.empty
     <*> newIORef M.empty
@@ -125,7 +108,7 @@ newMonitor = Monitor
 -- return it.
 getRef :: Ref r t
        => T.Text                      -- ^ 'Ref' name
-       -> IORef (M.HashMap T.Text r)  -- ^ Server that will serve the 'Ref'
+       -> IORef (M.HashMap T.Text r)  -- ^ 'Monitor' holding the 'Ref'
        -> IO r
 getRef name mapRef = do
     empty <- new
@@ -137,45 +120,36 @@ getRef name mapRef = do
     return ref
 {-# INLINABLE getRef #-}
 
--- | Return the counter associated with the given name and server.
+-- | Return the counter associated with the given name and monitor.
 -- Multiple calls to 'getCounter' with the same arguments will return
 -- the same counter.  The first time 'getCounter' is called for a
--- given name and server, a new, zero-initialized counter will be
+-- given name and monitor, a new, zero-initialized counter will be
 -- returned.
-getCounter :: T.Text  -- ^ Counter name
-           -> Server  -- ^ Server that will serve the counter
-           -> IO Counter
-getCounter name = monCounter name . getMonitor
+getCounter :: MonadIO m
+           => T.Text   -- ^ Counter name
+           -> Monitor  -- ^ 'Monitor' holding the 'Counter'
+           -> m Counter
+getCounter name mon = liftIO $! getRef name (userCounters mon)
 
--- | Return the gauge associated with the given name and server.
+-- | Return the gauge associated with the given name and monitor.
 -- Multiple calls to 'getGauge' with the same arguments will return
 -- the same gauge.  The first time 'getGauge' is called for a given
--- name and server, a new, zero-initialized gauge will be returned.
-getGauge :: T.Text  -- ^ Gauge name
-         -> Server  -- ^ Server that will serve the gauge
-         -> IO Gauge
-getGauge name = monGauge name . getMonitor
+-- name and monitor, a new, zero-initialized gauge will be returned.
+getGauge :: MonadIO m
+         => T.Text   -- ^ Gauge name
+         -> Monitor  -- ^ Monitor holding the 'Gauge'
+         -> m Gauge
+getGauge name mon = liftIO $! getRef name (userGauges mon)
 
--- | Return the label associated with the given name and server.
+-- | Return the label associated with the given name and monitor.
 -- Multiple calls to 'getLabel' with the same arguments will return
 -- the same label.  The first time 'getLabel' is called for a given
--- name and server, a new, empty label will be returned.
-getLabel :: T.Text  -- ^ Label name
-         -> Server  -- ^ Server that will serve the label
-         -> IO Label
-getLabel name = monLabel name . getMonitor
-
--- | Like @getCounter@ but working directly on a 'Monitor'.
-monCounter :: T.Text -> Monitor -> IO Counter
-monCounter name = getRef name . userCounters
-
--- | Like @getGauge@ but working directly on a 'Monitor'.
-monGauge :: T.Text -> Monitor -> IO Gauge
-monGauge name = getRef name . userGauges
-
--- | Like @getLabel@ but working directly on a 'Monitor'.
-monLabel :: T.Text -> Monitor -> IO Label
-monLabel name = getRef name . userLabels
+-- name and monitor, a new, empty label will be returned.
+getLabel :: MonadIO m
+         => T.Text   -- ^ Label name
+         -> Monitor  -- ^ Monitor holding the 'Label'
+         -> m Label
+getLabel name mon = liftIO $! getRef name (userLabels mon)
 
 ------------------------------------------------------------------------
 -- * Sampling
@@ -188,11 +162,11 @@ data Metrics = Metrics
     }
 
 -- | Sample all metrics.
-sampleAll :: Monitor -> IO Metrics
-sampleAll server = do
-    counters <- readAllRefs (userCounters server)
-    gauges <- readAllRefs (userGauges server)
-    labels <- readAllRefs (userLabels server)
+sampleAll :: MonadIO m => Monitor -> m Metrics
+sampleAll mon = liftIO $! do
+    counters <- readAllRefs (userCounters mon)
+    gauges <- readAllRefs (userGauges mon)
+    labels <- readAllRefs (userLabels mon)
     (gcCounters, gcGauges) <- partitionGcStats <$> getGcStats
     let allCounters = (map (mapSnd (I . fromIntegral)) counters ++ gcCounters)
         allGauges   = (map (mapSnd (I . fromIntegral)) gauges ++ gcGauges)
@@ -206,23 +180,23 @@ data Metric = Counter !Number
             | Gauge !Number
             | Label !T.Text
 
-sampleCombined :: Server -> IO (M.HashMap T.Text Metric)
-sampleCombined server = do
-    metrics <- sampleAll server
+sampleCombined :: MonadIO m => Monitor -> m (M.HashMap T.Text Metric)
+sampleCombined mon = do
+    metrics <- sampleAll mon
     -- This assumes that the same name wasn't used for two different
     -- metric types.
     return $! M.unions [M.map Counter (metricsCounters metrics),
                         M.map Gauge (metricsGauges metrics),
                         M.map Label (metricsLabels metrics)]
 
-sampleCounters :: Server -> IO (M.HashMap T.Text Number)
-sampleCounters server = metricsCounters <$> sampleAll server
+sampleCounters :: MonadIO m => Monitor -> m (M.HashMap T.Text Number)
+sampleCounters mon = liftIO $! metricsCounters <$> sampleAll mon
 
-sampleGauges :: Server -> IO (M.HashMap T.Text Number)
-sampleGauges server = metricsGauges <$> sampleAll server
+sampleGauges :: MonadIO m => Monitor -> m (M.HashMap T.Text Number)
+sampleGauges mon = liftIO $! metricsGauges <$> sampleAll mon
 
-sampleLabels :: Server -> IO (M.HashMap T.Text T.Text)
-sampleLabels server = metricsLabels <$> sampleAll server
+sampleLabels :: MonadIO m => Monitor -> m (M.HashMap T.Text T.Text)
+sampleLabels mon = liftIO $! metricsLabels <$> sampleAll mon
 
 -- | Apply a function to the second component of a pair and evaluate
 -- the result to WHNF.
@@ -364,40 +338,44 @@ partitionGcStats s@(Stats.GCStats {..}) = (counters, gauges)
 ------------------------------------------------------------------------
 
 -- | Serve a collection of counters or gauges, as a JSON object.
-buildMany :: (Ref r t, A.ToJSON t) => IORef (M.HashMap T.Text r)
-    -> IO L.ByteString
-buildMany mapRef = do
+buildMany :: (MonadIO m, Ref r t, A.ToJSON t)
+          => IORef (M.HashMap T.Text r)
+          -> m Value
+buildMany mapRef = liftIO $! do
     list <- readAllRefsAsJson mapRef
     time <- getTimeMillis
-    return $ A.encode $ A.toJSON $ Group list time
+    return . A.toJSON $ Group list time
 {-# INLINABLE buildMany #-}
 
--- | Serve all counter, gauges and labels, built-in or not, as a
+-- | Turn all counter, gauges and labels, built-in or not, into a
 -- nested JSON object.
-buildAll :: Monitor -> IO L.ByteString
-buildAll (Monitor counters gauges labels) = do
-    gcStats <- getGcStats
+buildAll :: MonadIO m => Monitor -> m Value
+buildAll (Monitor counters gauges labels) = liftIO $! do
+    gcStats     <- getGcStats
     counterList <- readAllRefsAsJson counters
-    gaugeList <- readAllRefsAsJson gauges
-    labelList <- readAllRefsAsJson labels
-    time <- getTimeMillis
-    return $ A.encode $ A.toJSON $ Stats gcStats counterList gaugeList
-        labelList time
-
-buildCombined :: Monitor -> IO L.ByteString
-buildCombined (Monitor counters gauges labels) = do
-    gcStats <- getGcStats
-    counterList <- readAllRefsAsJson counters
-    gaugeList <- readAllRefsAsJson gauges
-    labelList <- readAllRefsAsJson labels
-    time <- getTimeMillis
-    return $ A.encode $ A.toJSON $ Combined $
+    gaugeList   <- readAllRefsAsJson gauges
+    labelList   <- readAllRefsAsJson labels
+    time        <- getTimeMillis
+    return . A.toJSON $
         Stats gcStats counterList gaugeList labelList time
 
-buildOne :: (Ref r t, Show t)
-    => IORef (M.HashMap T.Text r) -> T.Text
-    -> IO (Maybe S.ByteString)
-buildOne refs name = do
+-- | Turn all counter, gauges and labels, built-in or not, into a
+-- flattened JSON object.
+buildCombined :: MonadIO m => Monitor -> m Value
+buildCombined (Monitor counters gauges labels) = liftIO $! do
+    gcStats     <- getGcStats
+    counterList <- readAllRefsAsJson counters
+    gaugeList   <- readAllRefsAsJson gauges
+    labelList   <- readAllRefsAsJson labels
+    time        <- getTimeMillis
+    return . A.toJSON . Combined $
+        Stats gcStats counterList gaugeList labelList time
+
+buildOne :: (MonadIO m, Ref r t, Show t)
+         => IORef (M.HashMap T.Text r)
+         -> T.Text
+         -> m (Maybe S.ByteString)
+buildOne refs name = liftIO $! do
     m <- readIORef refs
     case M.lookup name m of
         Just counter -> do
